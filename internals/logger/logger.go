@@ -25,6 +25,18 @@ func Error(msg string, fields ...zap.Field) {
 	log.Error(msg, fields...)
 }
 
+func Err(err error) zap.Field {
+	return zap.Error(err)
+}
+
 func Fatal(msg string, fields ...zap.Field) {
 	log.Fatal(msg, fields...)
+}
+
+func Field(key string, value interface{}) zap.Field {
+	return zap.Any(key, value)
+}
+
+func FieldInt(key string, value int) zap.Field {
+	return zap.Int(key, value)
 }

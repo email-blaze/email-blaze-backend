@@ -9,12 +9,13 @@ import (
 type Config struct {
 	SMTPPort     int    `yaml:"smtp_port"`
 	SMTPHost     string `yaml:"smtp_host"`
-	SMTPPassword string `yaml:"smtp_password"`
 	APIPort      int    `yaml:"api_port"`
 	DatabaseURL  string `yaml:"database_url"`
 	JWTSecret    string `yaml:"jwt_secret"`
 	RateLimit    int    `yaml:"rate_limit"`
 	MaxFileSize  int    `yaml:"max_file_size"`
+	SMTPUsername string `yaml:"smtp_username"`
+	SMTPPassword string `yaml:"smtp_password"`
 }
 
 func Load(filename string) (*Config, error) {

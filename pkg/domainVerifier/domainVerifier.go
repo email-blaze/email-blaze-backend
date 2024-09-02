@@ -1,4 +1,4 @@
-package domainverifier
+package domainVerifier
 
 import (
 	"fmt"

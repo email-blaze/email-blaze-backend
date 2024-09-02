@@ -1,88 +1,108 @@
 package smtp
 
 import (
+	"bytes"
 	"email-blaze/internals/config"
 	"email-blaze/internals/email"
+	"email-blaze/internals/logger"
 	"fmt"
 	"io"
 	"time"
 
-	gosmtp "github.com/emersion/go-smtp"
+	"github.com/emersion/go-sasl"
+	"github.com/emersion/go-smtp"
 )
 
-type Server struct {
+type Backend struct {
 	config *config.Config
 	sender *email.Sender
 }
 
-func NewServer(cfg *config.Config) *Server {
-	return &Server{
+func NewBackend(cfg *config.Config, sender *email.Sender) *Backend {
+	return &Backend{
 		config: cfg,
-		sender: email.NewSender(cfg),
+		sender: sender,
 	}
 }
 
-func (s *Server) Start() error {
-	be := &smtpBackend{
-		sender: s.sender,
-	}
-	srv := gosmtp.NewServer(be)
-
-	srv.Addr = fmt.Sprintf(":%d", s.config.SMTPPort)
-	srv.Domain = "localhost"
-	srv.ReadTimeout = 10 * time.Second
-	srv.WriteTimeout = 10 * time.Second
-	srv.MaxMessageBytes = 1024 * 1024
-	srv.MaxRecipients = 50
-	srv.AllowInsecureAuth = true
-
-	return srv.ListenAndServe()
-}
-
-type smtpBackend struct {
-	sender *email.Sender
-}
-
-func (s *smtpBackend) NewSession(state gosmtp.ConnectionState) (gosmtp.Session, error) {
-	return &smtpSession{
-		sender: s.sender,
+func (bkd *Backend) NewSession(_ *smtp.Conn) (smtp.Session, error) {
+	return &Session{
+		backend: bkd,
 	}, nil
 }
 
-
-
-type smtpSession struct {
-	sender *email.Sender
-	from   string
-	to     []string
+type Session struct {
+	backend *Backend
+	from    string
+	to      []string
 }
 
-func (s *smtpSession) AuthPlain(username, password string) error {
-	// Implement authentication here
-	return nil
+func (s *Session) AuthMechanisms() []string {
+	return []string{sasl.Plain}
 }
 
-func (s *smtpSession) Mail(from string, opts *gosmtp.MailOptions) error {
+func (s *Session) Auth(mech string) (sasl.Server, error) {
+	return sasl.NewPlainServer(func(identity, username, password string) error {
+		if username != s.backend.config.SMTPUsername || password != s.backend.config.SMTPPassword {
+			return fmt.Errorf("invalid username or password")
+		}
+		return nil
+	}), nil
+}
+
+func (s *Session) Mail(from string, _ *smtp.MailOptions) error {
 	s.from = from
 	return nil
 }
 
-func (s *smtpSession) Rcpt(to string) error {
+func (s *Session) Rcpt(to string, _ *smtp.RcptOptions) error {
 	s.to = append(s.to, to)
 	return nil
 }
 
-func (s *smtpSession) Data(r io.Reader) error {
-	// Implement email handling here
-	// Use s.sender to send emails
+func (s *Session) Data(r io.Reader) error {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+
+	email, err := email.Parse(bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+
+	for _, recipient := range s.to {
+		err := s.backend.sender.Send(s.from, recipient, email.Subject, email.Body)
+		if err != nil {
+			logger.Error("Failed to send email", logger.Field("error", err))
+			return err
+		}
+	}
+
 	return nil
 }
 
-func (s *smtpSession) Reset() {
+func (s *Session) Reset() {
 	s.from = ""
 	s.to = nil
 }
 
-func (s *smtpSession) Logout() error {
+func (s *Session) Logout() error {
 	return nil
+}
+
+func StartSMTPServer(cfg *config.Config, sender *email.Sender) error {
+	be := NewBackend(cfg, sender)
+	s := smtp.NewServer(be)
+
+	s.Addr = fmt.Sprintf(":%d", cfg.SMTPPort)
+	s.Domain = cfg.SMTPHost
+	s.ReadTimeout = 10 * time.Second
+	s.WriteTimeout = 10 * time.Second
+	s.MaxMessageBytes = 1024 * 1024
+	s.MaxRecipients = 50
+	s.AllowInsecureAuth = true
+
+	logger.Info("Starting SMTP server", logger.Field("addr", s.Addr))
+	return s.ListenAndServe()
 }
