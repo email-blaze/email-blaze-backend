@@ -30,3 +30,12 @@ config.yaml
 *.bak
 *.swp
 
+server.cnf
+ca.crt
+ca.key
+ca.srl
+server.crt
+server.key
+server.csr
+
+

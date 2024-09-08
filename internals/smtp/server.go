@@ -9,7 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
+
+	"crypto/tls"
 
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
@@ -75,13 +78,19 @@ func (s *Session) Data(r io.Reader) error {
 		return err
 	}
 
-	email, err := email.Parse(bytes.NewReader(b))
+	parsedEmail, err := email.Parse(bytes.NewReader(b))
 	if err != nil {
 		return err
 	}
 
+	// Determine if the email is HTML
+	isHTML := false
+	if strings.Contains(string(b), "Content-Type: text/html") {
+		isHTML = true
+	}
+
 	for _, recipient := range s.to {
-		err := s.backend.sender.Send(s.from, recipient, email.Subject, email.Body)
+		err := s.backend.sender.Send(s.from, recipient, parsedEmail.Subject, parsedEmail.Body, isHTML)
 		if err != nil {
 			logger.Error("Failed to send email", logger.Field("error", err))
 			return err
@@ -110,8 +119,17 @@ func StartSMTPServer(cfg *config.Config, sender *email.Sender) error {
 	s.WriteTimeout = 10 * time.Second
 	s.MaxMessageBytes = 1024 * 1024
 	s.MaxRecipients = 50
-	s.AllowInsecureAuth = true
+	s.AllowInsecureAuth = false // Disable insecure authentication
+
+	// Configure TLS
+	cert, err := tls.LoadX509KeyPair("server.crt", "server.key")
+	if err != nil {
+		return fmt.Errorf("failed to load TLS certificate: %w", err)
+	}
+	s.TLSConfig = &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
 
 	logger.Info("Starting SMTP server", logger.Field("addr", s.Addr))
-	return s.ListenAndServe()
+	return s.ListenAndServeTLS()
 }

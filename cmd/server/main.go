@@ -33,42 +33,68 @@ func main() {
 	}()
 
 	r := gin.Default()
+	r.Use(gin.Recovery())
 
-	r.POST("/api/send", rateLimitMiddleware(rateLimiter), authMiddleware(cfg), func(c *gin.Context) {
-		var req struct {
-			From    string `json:"from"`
-			To      string `json:"to"`
-			Subject string `json:"subject"`
-			Body    string `json:"body"`
-		}
+	api := r.Group("/api/v1")
+	{
+		api.POST("/send", rateLimitMiddleware(rateLimiter), authMiddleware(cfg), sendEmailHandler(sender))
+		api.POST("/verify", rateLimitMiddleware(rateLimiter), authMiddleware(cfg), verifyDomainHandler())
+		api.POST("/verify-sender", rateLimitMiddleware(rateLimiter), authMiddleware(cfg), verifySenderHandler())
+		api.POST("/send-verified", rateLimitMiddleware(rateLimiter), authMiddleware(cfg), sendVerifiedEmailHandler(sender))
+	}
 
-		if err := c.BindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	auth := r.Group("/auth")
+	{
+		auth.POST("/login", rateLimitMiddleware(rateLimiter), loginHandler(cfg))
+		auth.POST("/refresh", rateLimitMiddleware(rateLimiter), refreshTokenHandler(cfg))
+	}
+
+	logger.Info("Starting API server", logger.Field("port", cfg.APIPort))
+	if err := r.Run(fmt.Sprintf(":%d", cfg.APIPort)); err != nil {
+		logger.Fatal("Failed to start API server", logger.Err(err))
+	}
+}
+
+func sendEmailHandler(sender *email.Sender) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req email.SendRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 			return
 		}
 
-		if err := sender.Send(req.From, req.To, req.Subject, req.Body); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		if err := req.Validate(); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	
+
+		if err := sender.Send(req.From, req.To, req.Subject, req.Body, req.HTML); err != nil {
+			logger.Error("Failed to send email", logger.Err(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send email"})
 			return
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "Email sent successfully"})
-	})
+	}
+}
 
-	r.POST("/api/verify", rateLimitMiddleware(rateLimiter), authMiddleware(cfg), func(c *gin.Context) {
+func verifyDomainHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var req struct {
-			Domain   string `json:"domain"`
-			Selector string `json:"selector"`
+			Domain   string `json:"domain" binding:"required"`
+			Selector string `json:"selector" binding:"required"`
 		}
 
-		if err := c.BindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 			return
 		}
 
 		results, err := domainVerifier.VerifyDomain(req.Domain)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			logger.Error("Failed to verify domain", logger.Err(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify domain"})
 			return
 		}
 
@@ -78,18 +104,68 @@ func main() {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "Domain verified successfully"})
-	})
+	}
+}
 
-	
-
-	r.POST("/api/auth/login", rateLimitMiddleware(rateLimiter), func(c *gin.Context) {
+func verifySenderHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		var req struct {
-			Email    string `json:"email"`
-			Password string `json:"password"`
+			Email string `json:"email" binding:"required,email"`
 		}
 
-		if err := c.BindJSON(&req); err != nil {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		isValid, err := auth.VerifyEmail(req.Email)
+		if err != nil {
+			logger.Error("Failed to verify email", logger.Err(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify email"})
+			return
+		}
+
+		if !isValid {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid email or domain not properly configured"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Email verified successfully"})
+	}
+}
+
+func sendVerifiedEmailHandler(sender *email.Sender) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req email.SendRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		if err := req.Validate(); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		if err := sender.SendWithVerifiedSender(req.From, req.To, req.Subject, req.Body, req.ReplyTo); err != nil {
+			logger.Error("Failed to send email", logger.Err(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send email"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Email sent successfully"})
+	}
+}
+
+func loginHandler(cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Email    string `json:"email" binding:"required,email"`
+			Password string `json:"password" binding:"required"`
+		}
+
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 			return
 		}
 
@@ -102,16 +178,34 @@ func main() {
 
 		token, err := auth.GenerateToken(user, cfg.JWTSecret)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			logger.Error("Failed to generate token", logger.Err(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
 			return
 		}
 
 		c.JSON(http.StatusOK, gin.H{"token": token})
-	})
+	}
+}
 
-	logger.Info("Starting API server", logger.Field("port", cfg.APIPort))
-	if err := r.Run(fmt.Sprintf(":%d", cfg.APIPort)); err != nil {
-		logger.Fatal("Failed to start API server", logger.Err(err))
+func refreshTokenHandler(cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Token string `json:"token" binding:"required"`
+		}
+
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		newToken, err := auth.RefreshToken(req.Token, cfg.JWTSecret)
+		if err != nil {
+			logger.Error("Failed to refresh token", logger.Err(err))
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"token": newToken})
 	}
 }
 
