@@ -38,7 +38,7 @@
 
 The project is organized into several packages:
 
-- `pkg/domainverifier`: Handles domain and DKIM record verification
+- `pkg/domainVerifier`: Handles domain and DKIM record verification
 - `internals/logger`: Provides logging functionality using Zap
 - `internals/email`: Manages email sending operations
 - `internals/ratelimit`: Implements rate limiting for API requests

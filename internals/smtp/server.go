@@ -2,9 +2,11 @@ package smtp
 
 import (
 	"bytes"
+	"email-blaze/internals/auth"
 	"email-blaze/internals/config"
 	"email-blaze/internals/email"
 	"email-blaze/internals/logger"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -51,6 +53,13 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 }
 
 func (s *Session) Mail(from string, _ *smtp.MailOptions) error {
+	isValid, err := auth.VerifyEmail(from)
+	if err != nil {
+		return fmt.Errorf("email verification failed: %w", err)
+	}
+	if !isValid {
+			return errors.New("invalid email or domain not properly configured")
+	}
 	s.from = from
 	return nil
 }

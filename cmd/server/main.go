@@ -7,7 +7,7 @@ import (
 	"email-blaze/internals/logger"
 	"email-blaze/internals/ratelimit"
 	"email-blaze/internals/smtp"
-	domainVerifier "email-blaze/pkg/domainverifier"
+	"email-blaze/pkg/domainVerifier"
 	"fmt"
 	"net/http"
 
@@ -27,6 +27,8 @@ func main() {
 		if err := smtp.StartSMTPServer(cfg, sender); err != nil {
 			logger.Error("Failed to start SMTP server", logger.Err(err))
 			logger.Fatal("Exiting due to SMTP server failure")
+		} else {
+			logger.Info("SMTP server started successfully")
 		}
 	}()
 
@@ -64,18 +66,21 @@ func main() {
 			return
 		}
 
-		if err := domainVerifier.VerifyDomain(req.Domain); err != nil {
+		results, err := domainVerifier.VerifyDomain(req.Domain)
+		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 
-		if err := domainVerifier.VerifyDKIMRecord(req.Domain, req.Selector); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if !results["MX"] || !results["SPF"] || !results["DKIM"] || !results["DMARC"] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Domain not verified"})
 			return
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "Domain verified successfully"})
 	})
+
+	
 
 	r.POST("/api/auth/login", rateLimitMiddleware(rateLimiter), func(c *gin.Context) {
 		var req struct {
