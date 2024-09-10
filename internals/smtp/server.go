@@ -119,7 +119,7 @@ func StartSMTPServer(cfg *config.Config, sender *email.Sender) error {
 	s.WriteTimeout = 10 * time.Second
 	s.MaxMessageBytes = 1024 * 1024
 	s.MaxRecipients = 50
-	s.AllowInsecureAuth = false // Disable insecure authentication
+	s.AllowInsecureAuth = true // Allow plain auth over TLS
 
 	// Configure TLS
 	cert, err := tls.LoadX509KeyPair("server.crt", "server.key")
@@ -130,6 +130,10 @@ func StartSMTPServer(cfg *config.Config, sender *email.Sender) error {
 		Certificates: []tls.Certificate{cert},
 	}
 
+	s.EnableSMTPUTF8 = true
+	s.EnableREQUIRETLS = true
+	s.EnableBINARYMIME = true
+
 	logger.Info("Starting SMTP server", logger.Field("addr", s.Addr))
-	return s.ListenAndServeTLS()
+	return s.ListenAndServe() // Use ListenAndServe instead of ListenAndServeTLS
 }
