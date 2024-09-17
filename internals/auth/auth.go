@@ -6,22 +6,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
-
+	"email-blaze/internals/config"
 	"email-blaze/pkg/domainVerifier"
+
+	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type User struct {
-	ID       int
 	Email    string
 	Domain   string
-	Password string
 }
 
 func GenerateToken(user *User, secret string) (string, error) {
 	now := time.Now()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id": user.ID,
 		"email":   user.Email,
 		"domain":  user.Domain,
 		"iat":     now.Unix(),
@@ -89,3 +88,17 @@ func VerifyEmail(email string) (bool, error) {
 	return true, nil
 }
 
+
+
+func AuthenticateUser(cfg *config.Config, email, password string) (*User, error) {
+	for _, u := range cfg.Users {
+		if u.Email == email {
+			err := bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password))
+			if err == nil {
+				return &User{Email: u.Email, Domain: u.Domain}, nil
+			}
+			return nil, errors.New("invalid credentials")
+		}
+	}
+	return nil, errors.New("user not found")
+}

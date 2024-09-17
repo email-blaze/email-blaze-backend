@@ -28,10 +28,10 @@ func NewSender(cfg *config.Config) *Sender {
 	return &Sender{config: cfg}
 }
 
-func (s *Sender) Send(from, to, subject, body string, html bool) error {
-	auth := sasl.NewPlainClient("", from, s.config.SMTPPassword)
+func (s *Sender) Send(from, to, subject, body string, html bool, domain string) error {
+	auth := sasl.NewPlainClient("", s.config.DefaultUser.Email, s.config.DefaultUser.Password)
 
-	client, err := smtp.DialTLS(fmt.Sprintf("%s:%d", s.config.SMTPHost, s.config.SMTPPort), nil)
+	client, err := smtp.DialTLS(fmt.Sprintf("%s:%d", domain, s.config.SMTPPort), nil)
 	if err != nil {
 		return fmt.Errorf("failed to connect to SMTP server: %w", err)
 	}

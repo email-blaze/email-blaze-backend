@@ -99,7 +99,7 @@ func (s *Session) Data(r io.Reader) error {
 	}
 
 	for _, recipient := range s.to {
-		err := s.backend.sender.Send(s.from, recipient, parsedEmail.Subject, parsedEmail.Body, isHTML)
+		err := s.backend.sender.Send(s.from, recipient, parsedEmail.Subject, parsedEmail.Body, isHTML, s.backend.config.DefaultUser.Domain)
 		if err != nil {
 			logger.Error("Failed to send email", logger.Field("error", err))
 			return err

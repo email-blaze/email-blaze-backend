@@ -12,6 +12,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 func main() {
@@ -40,7 +41,7 @@ func main() {
 
 	api := r.Group("/api/v1")
 	{
-		api.POST("/send", rateLimitMiddleware(rateLimiter), authMiddleware(cfg), sendEmailHandler(sender))
+		api.POST("/send", rateLimitMiddleware(rateLimiter), authMiddleware(cfg), sendEmailHandler(sender, cfg))
 		api.POST("/verify", rateLimitMiddleware(rateLimiter), authMiddleware(cfg), verifyDomainHandler())
 		api.POST("/verify-sender", rateLimitMiddleware(rateLimiter), authMiddleware(cfg), verifySenderHandler())
 		api.POST("/send-verified", rateLimitMiddleware(rateLimiter), authMiddleware(cfg), sendVerifiedEmailHandler(sender))
@@ -58,7 +59,7 @@ func main() {
 	}
 }
 
-func sendEmailHandler(sender *email.Sender) gin.HandlerFunc {
+func sendEmailHandler(sender *email.Sender, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req email.SendRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -70,9 +71,25 @@ func sendEmailHandler(sender *email.Sender) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-	
 
-		if err := sender.Send(req.From, req.To, req.Subject, req.Body, req.HTML); err != nil {
+		userClaims, _ := c.Get("user")
+		claims := userClaims.(*jwt.MapClaims)
+		userEmail := (*claims)["email"].(string)
+
+		var userDomain string
+		for _, u := range cfg.Users {
+			if u.Email == userEmail {
+				userDomain = u.Domain
+				break
+			}
+		}
+
+		if userDomain == "" {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "User domain not found"})
+			return
+		}
+
+		if err := sender.Send(req.From, req.To, req.Subject, req.Body, req.HTML, userDomain); err != nil {
 			logger.Error("Failed to send email", logger.Err(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send email"})
 			return
@@ -161,11 +178,13 @@ func sendVerifiedEmailHandler(sender *email.Sender) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req email.SendRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
+			logger.Error("Failed to bind JSON", logger.Err(err))
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 			return
 		}
 
 		if err := req.Validate(); err != nil {
+			logger.Error("Invalid request", logger.Err(err))
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -192,11 +211,11 @@ func loginHandler(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		// TODO: Implement user authentication logic
-		user := &auth.User{
-			ID:     1,
-			Email:  req.Email,
-			Domain: "example.com",
+		user, err := auth.AuthenticateUser(cfg, req.Email, req.Password)
+		if err != nil {
+			logger.Error("Authentication failed", logger.Err(err))
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+			return
 		}
 
 		token, err := auth.GenerateToken(user, cfg.JWTSecret)

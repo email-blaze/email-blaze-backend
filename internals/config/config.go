@@ -8,6 +8,12 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+type User struct {
+	Email    string `yaml:"email"`
+	Password string `yaml:"password"`
+	Domain   string `yaml:"domain"`
+}
+
 type Config struct {
 	SMTPPort     int    `yaml:"smtp_port"`
 	SMTPHost     string `yaml:"smtp_host"`
@@ -18,6 +24,8 @@ type Config struct {
 	MaxFileSize  int    `yaml:"max_file_size"`
 	SMTPUsername string `yaml:"smtp_username"`
 	SMTPPassword string
+	Users        []User `yaml:"users"`
+	DefaultUser  User   `yaml:"default_user"`
 }
 
 func Load(filename string) (*Config, error) {
