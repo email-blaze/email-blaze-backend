@@ -3,8 +3,8 @@ package domainVerifier
 import (
 	"fmt"
 	"net"
+	"strings"
 )
-
 
 func VerifyMXRecord(domain string) error {
 	mxRecords, err := net.LookupMX(domain)
@@ -23,7 +23,7 @@ func VerifySPFRecord(domain string) error {
 		return fmt.Errorf("failed to lookup SPF record for %s: %v", domain, err)
 	}
 	for _, record := range txtRecords {
-		if len(record) > 5 && record[:6] == "v=spf1" {
+		if strings.HasPrefix(strings.ToLower(record), "v=spf1") {
 			return nil
 		}
 	}
@@ -31,56 +31,51 @@ func VerifySPFRecord(domain string) error {
 }
 
 func VerifyDKIMRecord(domain, selector string) error {
-	txtRecords, err := net.LookupTXT(fmt.Sprintf("%s._domainkey.%s", selector, domain))
+	dkimDomain := fmt.Sprintf("%s._domainkey.%s", selector, domain)
+	txtRecords, err := net.LookupTXT(dkimDomain)
 	if err != nil {
-		return fmt.Errorf("failed to lookup DKIM record for %s: %v", domain, err)
+		return fmt.Errorf("failed to lookup DKIM record for %s: %v", dkimDomain, err)
 	}
 	for _, record := range txtRecords {
-		if len(record) > 7 && record[:8] == "v=DKIM1" {
+		if strings.HasPrefix(record, "v=DKIM1") {
 			return nil
 		}
 	}
-	return fmt.Errorf("valid DKIM record not found for %s", domain)
+	return fmt.Errorf("valid DKIM record not found for %s", dkimDomain)
 }
 
 func VerifyDMARCRecord(domain string) error {
-	txtRecords, err := net.LookupTXT("_dmarc." + domain)
+	dmarcDomain := "_dmarc." + domain
+	txtRecords, err := net.LookupTXT(dmarcDomain)
 	if err != nil {
-		return fmt.Errorf("failed to lookup DMARC record for %s: %v", domain, err)
+		return fmt.Errorf("failed to lookup DMARC record for %s: %v", dmarcDomain, err)
 	}
 	for _, record := range txtRecords {
-		if len(record) > 7 && record[:8] == "v=DMARC1" {
-			return nil
+		if strings.HasPrefix(record, "v=DMARC1") {
+			// Check for required tags
+			if strings.Contains(record, "p=") {
+				return nil
+			}
 		}
 	}
-	return fmt.Errorf("valid DMARC record not found for %s", domain)
+	return fmt.Errorf("valid DMARC record not found for %s", dmarcDomain)
 }
 
-func VerifyDomain(domain string) (map[string]bool, error) {
-	results := make(map[string]bool)
-
-	if err := VerifyMXRecord(domain); err == nil {
-		results["MX"] = true
-	} else {
-		results["MX"] = false
+func VerifyDomain(domain string) (map[string]string, error) {
+	results := make(map[string]string)
+	verifiers := map[string]func(string) error{
+		"MX":    VerifyMXRecord,
+		"SPF":   VerifySPFRecord,
+		"DKIM":  func(d string) error { return VerifyDKIMRecord(d, "default") },
+		"DMARC": VerifyDMARCRecord,
 	}
 
-	if err := VerifySPFRecord(domain); err == nil {
-		results["SPF"] = true
-	} else {
-		results["SPF"] = false
-	}
-
-	if err := VerifyDKIMRecord(domain, "default"); err == nil {
-		results["DKIM"] = true
-	} else {
-		results["DKIM"] = false
-	}
-
-	if err := VerifyDMARCRecord(domain); err == nil {
-		results["DMARC"] = true
-	} else {
-		results["DMARC"] = false
+	for name, verifier := range verifiers {
+		if err := verifier(domain); err == nil {
+			results[name] = "Valid"
+		} else {
+			results[name] = fmt.Sprintf("Invalid: %v", err)
+		}
 	}
 
 	return results, nil

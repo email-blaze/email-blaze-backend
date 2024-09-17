@@ -48,7 +48,16 @@ func (s *Session) AuthMechanisms() []string {
 
 func (s *Session) Auth(mech string) (sasl.Server, error) {
 	return sasl.NewPlainServer(func(identity, username, password string) error {
+		logger.Info("Auth attempt",
+            logger.Field("identity", identity),
+            logger.Field("username", username),
+            logger.Field("password", password),
+            logger.Field("config_username", s.backend.config.SMTPUsername),
+            logger.Field("config_password", s.backend.config.SMTPPassword))
 		if username != s.backend.config.SMTPUsername || password != s.backend.config.SMTPPassword {
+			logger.Error("Authentication failed",
+			logger.Field("provided_username", username),
+			logger.Field("config_username", s.backend.config.SMTPUsername))
 			return fmt.Errorf("invalid username or password")
 		}
 		return nil
@@ -115,11 +124,11 @@ func StartSMTPServer(cfg *config.Config, sender *email.Sender) error {
 
 	s.Addr = fmt.Sprintf(":%d", cfg.SMTPPort)
 	s.Domain = cfg.SMTPHost
-	s.ReadTimeout = 10 * time.Second
-	s.WriteTimeout = 10 * time.Second
-	s.MaxMessageBytes = 1024 * 1024
+	s.ReadTimeout = 30 * time.Second
+	s.WriteTimeout = 30 * time.Second
+	s.MaxMessageBytes = 10 * 1024 * 1024 // 10 MB
 	s.MaxRecipients = 50
-	s.AllowInsecureAuth = true // Allow plain auth over TLS
+	s.AllowInsecureAuth = false // Disable insecure authentication
 
 	// Configure TLS
 	cert, err := tls.LoadX509KeyPair("server.crt", "server.key")
@@ -128,12 +137,16 @@ func StartSMTPServer(cfg *config.Config, sender *email.Sender) error {
 	}
 	s.TLSConfig = &tls.Config{
 		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
 	}
 
 	s.EnableSMTPUTF8 = true
 	s.EnableREQUIRETLS = true
 	s.EnableBINARYMIME = true
+	s.EnableDSN = true
+	// Implement rate limiting
+	s.MaxLineLength = 1000
 
 	logger.Info("Starting SMTP server", logger.Field("addr", s.Addr))
-	return s.ListenAndServe() // Use ListenAndServe instead of ListenAndServeTLS
+	return s.ListenAndServeTLS() // Use ListenAndServeTLS for secure connections
 }

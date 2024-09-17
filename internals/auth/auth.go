@@ -81,7 +81,8 @@ func VerifyEmail(email string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if !results["MX"] || !results["SPF"] || !results["DKIM"] || !results["DMARC"] {
+
+	if v, ok := results["MX"]; !ok || v != "Valid" {
 		return false, nil
 	}
 

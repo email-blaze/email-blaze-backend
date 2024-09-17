@@ -15,6 +15,9 @@ import (
 )
 
 func main() {
+	if err := logger.Init("debug", "development", "console"); err != nil {
+		panic(err)
+	}
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
 		logger.Fatal("Failed to load config", logger.Err(err))
@@ -82,8 +85,7 @@ func sendEmailHandler(sender *email.Sender) gin.HandlerFunc {
 func verifyDomainHandler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
-			Domain   string `json:"domain" binding:"required"`
-			Selector string `json:"selector" binding:"required"`
+			Domain string `json:"domain" binding:"required"`
 		}
 
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -91,19 +93,40 @@ func verifyDomainHandler() gin.HandlerFunc {
 			return
 		}
 
-		results, err := domainVerifier.VerifyDomain(req.Domain)
-		if err != nil {
-			logger.Error("Failed to verify domain", logger.Err(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify domain"})
-			return
+		results := make(map[string]string)
+
+		// Check MX record (essential)
+		if err := domainVerifier.VerifyMXRecord(req.Domain); err == nil {
+			results["MX"] = "Valid"
+		} else {
+			results["MX"] = fmt.Sprintf("Invalid: %v", err)
 		}
 
-		if !results["MX"] || !results["SPF"] || !results["DKIM"] || !results["DMARC"] {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Domain not verified"})
-			return
+		// Check SPF record (recommended)
+		if err := domainVerifier.VerifySPFRecord(req.Domain); err == nil {
+			results["SPF"] = "Valid"
+		} else {
+			results["SPF"] = fmt.Sprintf("Invalid: %v", err)
 		}
 
-		c.JSON(http.StatusOK, gin.H{"message": "Domain verified successfully"})
+		// Determine overall status
+		if results["MX"] == "Valid" {
+			status := "Domain verified for sending"
+			if results["SPF"] == "Valid" {
+				status += " with SPF"
+			} else {
+				status += " (SPF recommended)"
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"message": status,
+				"results": results,
+			})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "Domain not verified for sending",
+				"results": results,
+			})
+		}
 	}
 }
 
