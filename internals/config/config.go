@@ -26,6 +26,8 @@ type Config struct {
 	SMTPPassword string
 	Users        []User `yaml:"users"`
 	DefaultUser  User   `yaml:"default_user"`
+	SSLCertFile  string `yaml:"ssl_cert_file"`
+	SSLKeyFile   string `yaml:"ssl_key_file"`
 }
 
 func Load(filename string) (*Config, error) {

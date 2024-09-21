@@ -131,7 +131,7 @@ func StartSMTPServer(cfg *config.Config, sender *email.Sender) error {
 	s.AllowInsecureAuth = false // Disable insecure authentication
 
 	// Configure TLS
-	cert, err := tls.LoadX509KeyPair("server.crt", "server.key")
+	cert, err := tls.LoadX509KeyPair(cfg.SSLCertFile, cfg.SSLKeyFile)
 	if err != nil {
 		return fmt.Errorf("failed to load TLS certificate: %w", err)
 	}
