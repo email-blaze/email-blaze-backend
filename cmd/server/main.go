@@ -75,7 +75,7 @@ func sendEmailHandler(sender *email.Sender, cfg *config.Config) gin.HandlerFunc 
 		userClaims, _ := c.Get("user")
 		claims := userClaims.(*jwt.MapClaims)
 		userEmail := (*claims)["email"].(string)
-
+		logger.Info("User email", logger.Field("email", userClaims));
 		var userDomain string
 		for _, u := range cfg.Users {
 			if u.Email == userEmail {

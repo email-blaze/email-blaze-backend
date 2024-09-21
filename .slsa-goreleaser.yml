@@ -1,0 +1,78 @@
+version: 1
+
+# Builders define the environments where your builds run.
+builders:
+  - id: ubuntu-latest
+    name: ubuntu-latest
+    run-on: ubuntu-latest
+
+# Artifacts define the files you want to upload with your release.
+artifacts:
+  - id: email-blaze-binary
+    name: email-blaze
+    path: dist/email-blaze_*
+
+# Build configuration
+builds:
+  - id: email-blaze
+    binary: email-blaze
+    main: ./cmd/server
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+
+# Archive configuration
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+
+# Checksum configuration
+checksum:
+  name_template: 'checksums.txt'
+
+# Snapshot configuration
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+# Changelog configuration
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^chore:'
+
+# Release configuration
+release:
+  github:
+    owner: suyash-thakur
+    name: email-blaze
+
+# Before hooks
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+# SLSA provenance
+slsa_provenance:
+  - id: email-blaze-provenance
+    artifact_id: email-blaze-binary
+    builder_id: ubuntu-latest
+

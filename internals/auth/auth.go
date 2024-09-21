@@ -10,7 +10,6 @@ import (
 	"email-blaze/pkg/domainVerifier"
 
 	"github.com/golang-jwt/jwt/v5"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type User struct {
@@ -93,10 +92,10 @@ func VerifyEmail(email string) (bool, error) {
 func AuthenticateUser(cfg *config.Config, email, password string) (*User, error) {
 	for _, u := range cfg.Users {
 		if u.Email == email {
-			err := bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password))
-			if err == nil {
+			if u.Password == password {
 				return &User{Email: u.Email, Domain: u.Domain}, nil
 			}
+
 			return nil, errors.New("invalid credentials")
 		}
 	}
