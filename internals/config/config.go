@@ -28,6 +28,7 @@ type Config struct {
 	DefaultUser  User   `yaml:"default_user"`
 	SSLCertFile  string `yaml:"ssl_cert_file"`
 	SSLKeyFile   string `yaml:"ssl_key_file"`
+	DevelopmentMode bool `yaml:"development_mode"`
 }
 
 func Load(filename string) (*Config, error) {
@@ -69,22 +70,26 @@ func (c *Config) validate() error {
 		return fmt.Errorf("API port is required")
 	}
 	if c.DatabaseURL == "" {
-		return fmt.Errorf("Database URL is required")
+		return fmt.Errorf("database url is required")
 	}
 	if c.JWTSecret == "" {
 		return fmt.Errorf("JWT secret is required")
 	}
 	if c.RateLimit == 0 {
-		return fmt.Errorf("Rate limit is required")
+		return fmt.Errorf("rate limit is required")
 	}
 	if c.MaxFileSize == 0 {
-		return fmt.Errorf("Max file size is required")
+		return fmt.Errorf("max file size is required")
 	}
 	if c.SMTPUsername == "" {
-		return fmt.Errorf("SMTP username is required")
+		return fmt.Errorf("smtp username is required")
 	}
 	if c.SMTPPassword == "" {
-		return fmt.Errorf("SMTP password is required")
+		return fmt.Errorf("smtp password is required")
 	}
+	if !c.DevelopmentMode && (c.SSLCertFile == "" || c.SSLKeyFile == "") {
+		return fmt.Errorf("SSL certificate and key file paths must be provided in production mode")
+	}
+
 	return nil
 }

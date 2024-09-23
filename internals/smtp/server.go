@@ -128,8 +128,10 @@ func StartSMTPServer(cfg *config.Config, sender *email.Sender) error {
 	s.WriteTimeout = 30 * time.Second
 	s.MaxMessageBytes = 10 * 1024 * 1024 // 10 MB
 	s.MaxRecipients = 50
-	s.AllowInsecureAuth = false // Disable insecure authentication
+	s.AllowInsecureAuth = cfg.DevelopmentMode // Disable insecure authentication
 
+
+	if !cfg.DevelopmentMode {
 	// Configure TLS
 	cert, err := tls.LoadX509KeyPair(cfg.SSLCertFile, cfg.SSLKeyFile)
 	if err != nil {
@@ -147,6 +149,10 @@ func StartSMTPServer(cfg *config.Config, sender *email.Sender) error {
 	// Implement rate limiting
 	s.MaxLineLength = 1000
 
-	logger.Info("Starting SMTP server", logger.Field("addr", s.Addr))
-	return s.ListenAndServeTLS() // Use ListenAndServeTLS for secure connections
+		logger.Info("Starting SMTP server in development mode (TLS disabled)", logger.Field("addr", s.Addr))
+		return s.ListenAndServeTLS() // Use ListenAndServeTLS for secure connections
+	} else {
+		logger.Info("Starting SMTP server", logger.Field("addr", s.Addr))
+		return s.ListenAndServe() // Use ListenAndServe for insecure connections
+	}
 }
