@@ -27,8 +27,13 @@ type Config struct {
 	Users        []User `yaml:"users"`
 	DefaultUser  User   `yaml:"default_user"`
 	SSLCertFile  string `yaml:"ssl_cert_file"`
-	SSLKeyFile   string `yaml:"ssl_key_file"`
-	DevelopmentMode bool `yaml:"development_mode"`
+	SSLKeyFile       string `yaml:"ssl_key_file"`
+	DevelopmentMode  bool   `yaml:"development_mode"`
+	SMTPReadTimeout  int    `yaml:"smtp_read_timeout"`
+	SMTPWriteTimeout int    `yaml:"smtp_write_timeout"`
+	MaxMessageSize   int    `yaml:"max_message_size"`
+	MaxRecipients    int    `yaml:"max_recipients"`
+	MaxLineLength    int    `yaml:"max_line_length"`
 }
 
 func Load(filename string) (*Config, error) {
@@ -86,6 +91,21 @@ func (c *Config) validate() error {
 	}
 	if c.SMTPPassword == "" {
 		return fmt.Errorf("smtp password is required")
+	}
+	if c.SMTPReadTimeout == 0 {
+		return fmt.Errorf("smtp read timeout is required")
+	}
+	if c.SMTPWriteTimeout == 0 {
+		return fmt.Errorf("smtp write timeout is required")
+	}
+	if c.MaxMessageSize == 0 {
+		return fmt.Errorf("max message size is required")
+	}
+	if c.MaxRecipients == 0 {
+		return fmt.Errorf("max recipients is required")
+	}
+	if c.MaxLineLength == 0 {
+		return fmt.Errorf("max line length is required")
 	}
 	if !c.DevelopmentMode && (c.SSLCertFile == "" || c.SSLKeyFile == "") {
 		return fmt.Errorf("SSL certificate and key file paths must be provided in production mode")

@@ -1,7 +1,9 @@
 package smtp
 
 import (
+	"bufio"
 	"bytes"
+	"crypto/tls"
 	"email-blaze/internals/auth"
 	"email-blaze/internals/config"
 	"email-blaze/internals/email"
@@ -9,10 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
-
-	"crypto/tls"
 
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
@@ -32,11 +33,17 @@ func NewBackend(cfg *config.Config, sender *email.Sender) *Backend {
 
 func (bkd *Backend) NewSession(_ *smtp.Conn) (smtp.Session, error) {
 	return &Session{
+		id:      generateUniqueID(),
 		backend: bkd,
 	}, nil
 }
 
+func generateUniqueID() string {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
 type Session struct {
+	id      string
 	backend *Backend
 	from    string
 	to      []string
@@ -67,10 +74,11 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 func (s *Session) Mail(from string, _ *smtp.MailOptions) error {
 	isValid, err := auth.VerifyEmail(from)
 	if err != nil {
+		logger.Error("Email verification failed", logger.Err(err))
 		return fmt.Errorf("email verification failed: %w", err)
 	}
 	if !isValid {
-			return errors.New("invalid email or domain not properly configured")
+		return errors.New("invalid email or domain not properly configured")
 	}
 	s.from = from
 	return nil
@@ -82,29 +90,100 @@ func (s *Session) Rcpt(to string, _ *smtp.RcptOptions) error {
 }
 
 func (s *Session) Data(r io.Reader) error {
-	b, err := io.ReadAll(r)
-	if err != nil {
-		return err
-	}
-
-	parsedEmail, err := email.Parse(bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-
-	// Determine if the email is HTML
-	isHTML := false
-	if strings.Contains(string(b), "Content-Type: text/html") {
-		isHTML = true
-	}
-
-	for _, recipient := range s.to {
-		err := s.backend.sender.Send(s.from, recipient, parsedEmail.Subject, parsedEmail.Body, isHTML, s.backend.config.DefaultUser.Domain)
+	logger.Info("Received email data", logger.Field("sessionID", s.id), logger.Field("from", s.from), logger.Field("to", s.to))
+	
+	var b bytes.Buffer
+	reader := bufio.NewReader(r)
+	
+	for {
+		line, err := reader.ReadString('\n')
 		if err != nil {
-			logger.Error("Failed to send email", logger.Field("error", err))
-			return err
+			if err == io.EOF {
+				logger.Info("EOF reached", logger.Field("sessionID", s.id))
+				break
+			}
+			logger.Error("Failed to read email data", logger.Field("sessionID", s.id), logger.Err(err))
+			return fmt.Errorf("failed to read email data: %w", err)
+		}
+
+		// Check for end-of-data marker
+		if line == ".\r\n" || line == ".\n" {
+			logger.Info("End-of-data marker found", logger.Field("sessionID", s.id))
+			break
+		}
+
+		// Remove leading dot if line starts with ".."
+		if strings.HasPrefix(line, "..") {
+			line = line[1:]
+		}
+
+		if _, err := b.WriteString(line); err != nil {
+			logger.Error("Failed to write to buffer", logger.Field("sessionID", s.id), logger.Err(err))
+			return fmt.Errorf("failed to write to buffer: %w", err)
+		}
+
+		if b.Len() > s.backend.config.MaxMessageSize {
+			logger.Error("Message too large", logger.Field("sessionID", s.id), logger.Field("size", b.Len()))
+			return errors.New("message too large")
 		}
 	}
+
+	// Process the email
+	err := s.processEmail(&b)
+	if err != nil {
+		logger.Error("Failed to process email", logger.Field("sessionID", s.id), logger.Err(err))
+		return err
+	}
+
+	logger.Info("Email processed successfully", logger.Field("sessionID", s.id))
+	return nil
+}
+
+func (s *Session) processEmail(b *bytes.Buffer) error {
+	start := time.Now()
+	parsedEmail, err := email.Parse(bytes.NewReader(b.Bytes()))
+	if err != nil {
+		logger.Error("Failed to parse email", logger.Field("sessionID", s.id), logger.Err(err))
+		return fmt.Errorf("failed to parse email: %w", err)
+	}
+	parseTime := time.Since(start)
+
+	// Determine if the email is HTML
+	isHTML := strings.Contains(b.String(), "Content-Type: text/html")
+
+	for _, recipient := range s.to {
+		sendStart := time.Now()
+		err := s.backend.sender.Send(s.from, recipient, parsedEmail.Subject, parsedEmail.Body, isHTML, s.backend.config.DefaultUser.Domain)
+		sendTime := time.Since(sendStart)
+		if err != nil {
+			logger.Error("Failed to send email", 
+				logger.Field("sessionID", s.id),
+				logger.Field("error", err),
+				logger.Field("from", s.from),
+				logger.Field("to", recipient),
+				logger.Field("subject", parsedEmail.Subject),
+				logger.Field("parseTime", parseTime),
+				logger.Field("sendTime", sendTime))
+			return fmt.Errorf("failed to send email: %w", err)
+		}
+		logger.Info("Email sent successfully", 
+			logger.Field("sessionID", s.id),
+			logger.Field("from", s.from),
+			logger.Field("to", recipient),
+			logger.Field("subject", parsedEmail.Subject),
+			logger.Field("parseTime", parseTime),
+			logger.Field("sendTime", sendTime))
+	}
+
+	totalTime := time.Since(start)
+	logger.Info("Email processed successfully", 
+		logger.Field("sessionID", s.id),
+		logger.Field("from", s.from),
+		logger.Field("to", s.to),
+		logger.Field("subject", parsedEmail.Subject),
+		logger.Field("size", b.Len()),
+		logger.Field("isHTML", isHTML),
+		logger.Field("totalTime", totalTime))
 
 	return nil
 }
@@ -124,35 +203,37 @@ func StartSMTPServer(cfg *config.Config, sender *email.Sender) error {
 
 	s.Addr = fmt.Sprintf(":%d", cfg.SMTPPort)
 	s.Domain = cfg.SMTPHost
-	s.ReadTimeout = 30 * time.Second
-	s.WriteTimeout = 30 * time.Second
-	s.MaxMessageBytes = 10 * 1024 * 1024 // 10 MB
-	s.MaxRecipients = 50
-	s.AllowInsecureAuth = cfg.DevelopmentMode // Disable insecure authentication
-
-
-	if !cfg.DevelopmentMode {
-	// Configure TLS
-	cert, err := tls.LoadX509KeyPair(cfg.SSLCertFile, cfg.SSLKeyFile)
-	if err != nil {
-		return fmt.Errorf("failed to load TLS certificate: %w", err)
-	}
-	s.TLSConfig = &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS12,
-	}
+	s.ReadTimeout = time.Duration(cfg.SMTPReadTimeout) * time.Second
+	s.WriteTimeout = time.Duration(cfg.SMTPWriteTimeout) * time.Second
+	s.MaxMessageBytes = int64(cfg.MaxMessageSize)
+	s.MaxRecipients = cfg.MaxRecipients
+	s.AllowInsecureAuth = cfg.DevelopmentMode
 
 	s.EnableSMTPUTF8 = true
-	s.EnableREQUIRETLS = true
 	s.EnableBINARYMIME = true
 	s.EnableDSN = true
-	// Implement rate limiting
-	s.MaxLineLength = 1000
+	s.MaxLineLength = cfg.MaxLineLength
 
-		logger.Info("Starting SMTP server in development mode (TLS disabled)", logger.Field("addr", s.Addr))
-		return s.ListenAndServeTLS() // Use ListenAndServeTLS for secure connections
+	logger.Info("Starting SMTP server", 
+		logger.Field("addr", s.Addr),
+		logger.Field("domain", s.Domain),
+		logger.Field("allowInsecureAuth", s.AllowInsecureAuth),
+		logger.Field("maxMessageBytes", s.MaxMessageBytes),
+		logger.Field("maxRecipients", s.MaxRecipients))
+
+	if cfg.DevelopmentMode {
+		s.Debug = os.Stdout
+		return s.ListenAndServe()
 	} else {
-		logger.Info("Starting SMTP server", logger.Field("addr", s.Addr))
-		return s.ListenAndServe() // Use ListenAndServe for insecure connections
+		cert, err := tls.LoadX509KeyPair(cfg.SSLCertFile, cfg.SSLKeyFile)
+		if err != nil {
+			return fmt.Errorf("failed to load TLS certificate: %w", err)
+		}
+		s.TLSConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
+		s.EnableREQUIRETLS = true
+		return s.ListenAndServeTLS()
 	}
 }

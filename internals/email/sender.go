@@ -3,6 +3,7 @@ package email
 import (
 	"bytes"
 	"email-blaze/internals/config"
+	"email-blaze/internals/logger"
 	"errors"
 	"fmt"
 	"io"
@@ -29,45 +30,65 @@ func NewSender(cfg *config.Config) *Sender {
 }
 
 func (s *Sender) Send(from, to, subject, body string, html bool, domain string) error {
+	logger.Info("Starting email send process",
+		logger.Field("from", from),
+		logger.Field("to", to),
+		logger.Field("subject", subject),
+		logger.Field("html", html),
+		logger.Field("domain", domain))
+
 	auth := sasl.NewPlainClient("", s.config.DefaultUser.Email, s.config.DefaultUser.Password)
 
+	logger.Info("Dialing SMTP server", logger.Field("address", fmt.Sprintf("%s:%d", domain, s.config.SMTPPort)))
 	client, err := smtp.DialTLS(fmt.Sprintf("%s:%d", domain, s.config.SMTPPort), nil)
 	if err != nil {
+		logger.Error("Failed to connect to SMTP server", logger.Err(err))
 		return fmt.Errorf("failed to connect to SMTP server: %w", err)
 	}
 	defer client.Close()
 
+	logger.Info("Authenticating with SMTP server")
 	if err := client.Auth(auth); err != nil {
+		logger.Error("Failed to authenticate", logger.Err(err))
 		return fmt.Errorf("failed to authenticate: %w", err)
 	}
 
+	logger.Info("Setting sender", logger.Field("from", from))
 	if err := client.Mail(from, nil); err != nil {
+		logger.Error("Failed to set sender", logger.Err(err))
 		return fmt.Errorf("failed to set sender: %w", err)
 	}
 
+	logger.Info("Setting recipient", logger.Field("to", to))
 	if err := client.Rcpt(to, nil); err != nil {
+		logger.Error("Failed to set recipient", logger.Err(err))
 		return fmt.Errorf("failed to set recipient: %w", err)
 	}
 
+	logger.Info("Opening data connection")
 	w, err := client.Data()
 	if err != nil {
+		logger.Error("Failed to open data connection", logger.Err(err))
 		return fmt.Errorf("failed to open data connection: %w", err)
 	}
+	defer w.Close()
 
-	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: %s\r\n\r\n%s",
+	msg := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: %s\r\n\r\n%s\r\n.",
 		from, to, subject, contentType(html), body)
-	if _, err := io.WriteString(w, msg); err != nil {
+	logger.Info("Writing email content")
+	_, err = fmt.Fprintf(w, "%s\r\n", msg)
+	if err != nil {
+		logger.Error("Failed to write email content", logger.Err(err))
 		return fmt.Errorf("failed to write email content: %w", err)
 	}
 
-	if err := w.Close(); err != nil {
-		return fmt.Errorf("failed to close data connection: %w", err)
-	}
-
+	logger.Info("Closing SMTP connection")
 	if err := client.Quit(); err != nil {
+		logger.Error("Failed to close SMTP connection", logger.Err(err))
 		return fmt.Errorf("failed to close SMTP connection: %w", err)
 	}
 
+	logger.Info("Email sent successfully")
 	return nil
 }
 
